@@ -19,8 +19,8 @@ class UOMMustBeIntegerError(frappe.ValidationError):
 
 class TransactionBase(StatusUpdater):
 	def validate_posting_time(self):
-		# set Edit Posting Date and Time to 1 while data import
-		if frappe.flags.in_import and self.posting_date:
+		# set Edit Posting Date and Time to 1 while data import and restore
+		if (frappe.flags.in_import or self.flags.from_restore) and self.posting_date:
 			self.set_posting_time = 1
 
 		if not getattr(self, "set_posting_time", None):
@@ -263,7 +263,7 @@ class TransactionBase(StatusUpdater):
 					"company": self.get("company"),
 					"order_type": self.get("order_type"),
 					"is_pos": cint(self.get("is_pos")),
-					"is_return": cint(self.get("is_return)")),
+					"is_return": cint(self.get("is_return")),
 					"is_subcontracted": self.get("is_subcontracted"),
 					"ignore_pricing_rule": self.get("ignore_pricing_rule"),
 					"doctype": self.get("doctype"),
@@ -287,13 +287,17 @@ class TransactionBase(StatusUpdater):
 					"child_docname": item.get("name"),
 					"is_old_subcontracting_flow": self.get("is_old_subcontracting_flow"),
 				}
-			)
+			),
+			self,
 		)
 
 	@frappe.whitelist()
-	def process_item_selection(self, item_idx):
+	def process_item_selection(self, item_idx: int):
 		# Server side 'item' doc. Update this to reflect in UI
 		item_obj = self.get("items", {"idx": item_idx})[0]
+
+		if not item_obj.item_code:
+			return
 
 		# 'item_details' has latest item related values
 		item_details = self.fetch_item_details(item_obj)
@@ -338,6 +342,7 @@ class TransactionBase(StatusUpdater):
 				args.update(
 					{
 						"posting_date": self.transaction_date,
+						"posting_time": self.transaction_time,
 					}
 				)
 			else:

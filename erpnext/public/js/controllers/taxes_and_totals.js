@@ -191,6 +191,7 @@ erpnext.taxes_and_totals = class TaxesAndTotals extends erpnext.payments {
 				tax.item_wise_tax_detail = {};
 			}
 			var tax_fields = [
+				"net_amount",
 				"total",
 				"tax_amount_after_discount_amount",
 				"tax_amount_for_current_item",
@@ -380,6 +381,9 @@ erpnext.taxes_and_totals = class TaxesAndTotals extends erpnext.payments {
 	}
 
 	calculate_taxes() {
+		// reset value from earlier calculations
+		this.grand_total_diff = 0;
+
 		const doc = this.frm.doc;
 		if (!doc.taxes?.length) return;
 
@@ -397,9 +401,14 @@ erpnext.taxes_and_totals = class TaxesAndTotals extends erpnext.payments {
 			var item_tax_map = me._load_item_tax_rate(item.item_tax_rate);
 			$.each(doc.taxes, function (i, tax) {
 				// tax_amount represents the amount of tax for the current step
-				var current_tax_amount = me.get_current_tax_amount(item, tax, item_tax_map);
+				var [current_net_amount, current_tax_amount] = me.get_current_tax_amount(
+					item,
+					tax,
+					item_tax_map
+				);
 				if (frappe.flags.round_row_wise_tax) {
 					current_tax_amount = flt(current_tax_amount, precision("tax_amount", tax));
+					current_net_amount = flt(current_net_amount, precision("net_amount", tax));
 				}
 
 				// Adjust divisional loss to the last item
@@ -416,6 +425,7 @@ erpnext.taxes_and_totals = class TaxesAndTotals extends erpnext.payments {
 					!(me.discount_amount_applied && me.frm.doc.apply_discount_on == "Grand Total")
 				) {
 					tax.tax_amount += current_tax_amount;
+					tax.net_amount += current_net_amount;
 				}
 
 				// store tax_amount for current item as it will be used for
@@ -477,7 +487,7 @@ erpnext.taxes_and_totals = class TaxesAndTotals extends erpnext.payments {
 
 		for (const [i, tax] of doc.taxes.entries()) {
 			me.round_off_totals(tax);
-			me.set_in_company_currency(tax, ["tax_amount", "tax_amount_after_discount_amount"]);
+			me.set_in_company_currency(tax, ["tax_amount", "tax_amount_after_discount_amount", "net_amount"]);
 
 			me.round_off_base_values(tax);
 
@@ -552,42 +562,7 @@ erpnext.taxes_and_totals = class TaxesAndTotals extends erpnext.payments {
 			current_tax_amount = tax_rate * item.qty;
 		}
 
-		if (!tax.dont_recompute_tax) {
-			this.set_item_wise_tax(item, tax, tax_rate, current_tax_amount, current_net_amount);
-		}
-
-		return current_tax_amount;
-	}
-
-	set_item_wise_tax(item, tax, tax_rate, current_tax_amount, current_net_amount) {
-		// store tax breakup for each item
-		let tax_detail = tax.item_wise_tax_detail;
-		let key = item.item_code || item.item_name;
-
-		if (typeof tax_detail == "string") {
-			tax.item_wise_tax_detail = JSON.parse(tax.item_wise_tax_detail);
-			tax_detail = tax.item_wise_tax_detail;
-		}
-
-		let item_wise_tax_amount = current_tax_amount * this.frm.doc.conversion_rate;
-		let item_wise_net_amount = current_net_amount * this.frm.doc.conversion_rate;
-		if (frappe.flags.round_row_wise_tax) {
-			item_wise_tax_amount = flt(item_wise_tax_amount, precision("tax_amount", tax));
-			item_wise_net_amount = flt(item_wise_net_amount, precision("net_amount", tax));
-			if (tax_detail && tax_detail[key]) {
-				item_wise_tax_amount += flt(tax_detail[key].tax_amount, precision("tax_amount", tax));
-				item_wise_net_amount += flt(tax_detail[key].net_amount, precision("net_amount", tax));
-			}
-		} else if (tax_detail && tax_detail[key]) {
-			item_wise_tax_amount += tax_detail[key].tax_amount;
-			item_wise_net_amount += tax_detail[key].net_amount;
-		}
-
-		tax_detail[key] = {
-			tax_rate: tax_rate,
-			tax_amount: flt(item_wise_tax_amount, precision("base_tax_amount", tax)),
-			net_amount: flt(item_wise_net_amount, precision("base_net_amount", tax)),
-		};
+		return [current_net_amount, current_tax_amount];
 	}
 
 	round_off_totals(tax) {
@@ -597,6 +572,7 @@ erpnext.taxes_and_totals = class TaxesAndTotals extends erpnext.payments {
 		}
 
 		tax.tax_amount = flt(tax.tax_amount, precision("tax_amount", tax));
+		tax.net_amount = flt(tax.net_amount, precision("net_amount", tax));
 		tax.tax_amount_after_discount_amount = flt(
 			tax.tax_amount_after_discount_amount,
 			precision("tax_amount", tax)
@@ -652,6 +628,14 @@ erpnext.taxes_and_totals = class TaxesAndTotals extends erpnext.payments {
 
 				if (diff && Math.abs(diff) <= 5.0 / Math.pow(10, precision("tax_amount", last_tax))) {
 					me.grand_total_diff = diff;
+				} else {
+					me.grand_total_diff = 0;
+				}
+
+				// Apply rounding adjustment to grand_total_for_distributing_discount
+				// to prevent precision errors during discount distribution
+				if (me.grand_total_for_distributing_discount && !me.discount_amount_applied) {
+					me.grand_total_for_distributing_discount += me.grand_total_diff;
 				}
 			}
 		}
@@ -661,10 +645,16 @@ erpnext.taxes_and_totals = class TaxesAndTotals extends erpnext.payments {
 		// Changing sequence can cause rounding_adjustmentng issue and on-screen discrepency
 		const me = this;
 		const tax_count = this.frm.doc.taxes?.length;
-		const grand_total_diff = this.grand_total_diff || 0;
+		const grand_total_diff = this.grand_total_diff;
 
 		this.frm.doc.grand_total = flt(
 			tax_count ? this.frm.doc["taxes"][tax_count - 1].total + grand_total_diff : this.frm.doc.net_total
+		);
+
+		// total taxes and charges is calculated before adjusting base grand total
+		this.frm.doc.total_taxes_and_charges = flt(
+			this.frm.doc.grand_total - this.frm.doc.net_total - grand_total_diff,
+			precision("total_taxes_and_charges")
 		);
 
 		if (
@@ -708,11 +698,6 @@ erpnext.taxes_and_totals = class TaxesAndTotals extends erpnext.payments {
 				"taxes_and_charges_deducted",
 			]);
 		}
-
-		this.frm.doc.total_taxes_and_charges = flt(
-			this.frm.doc.grand_total - this.frm.doc.net_total - grand_total_diff,
-			precision("total_taxes_and_charges")
-		);
 
 		this.set_in_company_currency(this.frm.doc, ["total_taxes_and_charges"]);
 
@@ -787,10 +772,6 @@ erpnext.taxes_and_totals = class TaxesAndTotals extends erpnext.payments {
 				$.each(temporary_fields, function (i, fieldname) {
 					delete tax[fieldname];
 				});
-
-				if (!tax.dont_recompute_tax) {
-					tax.item_wise_tax_detail = JSON.stringify(tax.item_wise_tax_detail);
-				}
 			});
 		}
 	}
@@ -1140,7 +1121,7 @@ erpnext.taxes_and_totals = class TaxesAndTotals extends erpnext.payments {
 			var payment_types = $.map(this.frm.doc.payments, function (d) {
 				return d.type;
 			});
-			if (in_list(payment_types, "Cash")) {
+			if (payment_types.includes("Cash")) {
 				var grand_total = this.frm.doc.rounded_total || this.frm.doc.grand_total;
 				var base_grand_total = this.frm.doc.base_rounded_total || this.frm.doc.base_grand_total;
 

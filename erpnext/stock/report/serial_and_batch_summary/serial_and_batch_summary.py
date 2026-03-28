@@ -1,6 +1,8 @@
 # Copyright (c) 2023, Frappe Technologies Pvt. Ltd. and contributors
 # For license information, please see license.txt
 
+from typing import Any
+
 import frappe
 from frappe import _
 
@@ -179,23 +181,24 @@ def get_columns(filters, data):
 
 @frappe.whitelist()
 @frappe.validate_and_sanitize_search_inputs
-def get_voucher_type(doctype, txt, searchfield, start, page_len, filters):
+def get_voucher_type(doctype: Any, txt: str, searchfield: Any, start: int, page_len: int, filters: dict):
 	child_doctypes = frappe.get_all(
 		"DocField",
 		filters={"fieldname": "serial_and_batch_bundle"},
-		fields=["distinct parent as parent"],
+		fields=["parent"],
+		distinct=True,
 	)
 
 	query_filters = {"options": ["in", [d.parent for d in child_doctypes]]}
 	if txt:
 		query_filters["parent"] = ["like", f"%{txt}%"]
 
-	return frappe.get_all("DocField", filters=query_filters, fields=["distinct parent"], as_list=True)
+	return frappe.get_all("DocField", filters=query_filters, fields=["parent"], as_list=True, distinct=True)
 
 
 @frappe.whitelist()
 @frappe.validate_and_sanitize_search_inputs
-def get_serial_nos(doctype, txt, searchfield, start, page_len, filters):
+def get_serial_nos(doctype: Any, txt: str, searchfield: Any, start: int, page_len: int, filters: dict):
 	query_filters = {}
 
 	if txt:
@@ -223,7 +226,7 @@ def get_serial_nos(doctype, txt, searchfield, start, page_len, filters):
 
 @frappe.whitelist()
 @frappe.validate_and_sanitize_search_inputs
-def get_batch_nos(doctype, txt, searchfield, start, page_len, filters):
+def get_batch_nos(doctype: Any, txt: str, searchfield: Any, start: int, page_len: int, filters: dict):
 	query_filters = {}
 
 	if filters.get("voucher_no") and txt:

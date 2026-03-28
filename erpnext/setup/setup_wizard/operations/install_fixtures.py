@@ -15,14 +15,7 @@ from frappe.utils import cstr, getdate
 
 from erpnext.accounts.doctype.account.account import RootNotEditable
 from erpnext.regional.address_template.setup import set_up_address_templates
-
-
-def _(x, *args, **kwargs):
-	"""Redefine the translation function to return the string as is.
-
-	We want to create english records but still mark the strings as translatable.
-	The respective DocTypes have 'Translate Link Fields' enabled."""
-	return x
+from erpnext.setup.utils import identity as _
 
 
 def read_lines(filename: str) -> list[str]:
@@ -30,7 +23,7 @@ def read_lines(filename: str) -> list[str]:
 	return (Path(__file__).parent.parent / "data" / filename).read_text().splitlines()
 
 
-def install(country=None):
+def get_preset_records(country=None):
 	records = [
 		# ensure at least an empty Address Template exists for this Country
 		{"doctype": "Address Template", "country": country},
@@ -323,6 +316,11 @@ def install(country=None):
 		{"doctype": "Workstation Operating Component", "component_name": _("Rent")},
 		{"doctype": "Workstation Operating Component", "component_name": _("Wages")},
 	]
+	return records
+
+
+def install(country=None):
+	records = get_preset_records(country)
 
 	for doctype, title_field, filename in (
 		("Designation", "designation_name", "designation.txt"),
@@ -433,9 +431,9 @@ def add_market_segments():
 	make_records(records)
 
 
-def add_sale_stages():
+def get_sale_stages():
 	# Sale Stages
-	records = [
+	return [
 		{"doctype": "Sales Stage", "stage_name": _("Prospecting")},
 		{"doctype": "Sales Stage", "stage_name": _("Qualification")},
 		{"doctype": "Sales Stage", "stage_name": _("Needs Analysis")},
@@ -445,6 +443,10 @@ def add_sale_stages():
 		{"doctype": "Sales Stage", "stage_name": _("Proposal/Price Quote")},
 		{"doctype": "Sales Stage", "stage_name": _("Negotiation/Review")},
 	]
+
+
+def add_sale_stages():
+	records = get_sale_stages()
 	for sales_stage in records:
 		frappe.get_doc(sales_stage).db_insert()
 
@@ -579,7 +581,7 @@ def create_bank_account(args, demo=False):
 			return doc
 
 		except RootNotEditable:
-			frappe.throw(_("Bank account cannot be named as {0}").format(args.get("bank_account")))
+			frappe.throw(frappe._("Bank account cannot be named as {0}").format(args.get("bank_account")))
 		except frappe.DuplicateEntryError:
 			# bank account same as a CoA entry
 			pass

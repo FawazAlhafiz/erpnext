@@ -131,6 +131,15 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 			frm.cscript.calculate_taxes_and_totals();
 		});
 
+		// Tax Withholding Entries - Auto calculate withholding amount when taxable amount or tax rate changes
+		frappe.ui.form.on("Tax Withholding Entry", "taxable_amount", function (frm, cdt, cdn) {
+			me.calculate_withholding_amount(frm, cdt, cdn);
+		});
+
+		frappe.ui.form.on("Tax Withholding Entry", "tax_rate", function (frm, cdt, cdn) {
+			me.calculate_withholding_amount(frm, cdt, cdn);
+		});
+
 		frappe.ui.form.on(this.frm.doctype + " Item", {
 			items_add: function (frm, cdt, cdn) {
 				var item = frappe.get_doc(cdt, cdn);
@@ -441,7 +450,109 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 			},
 		});
 	}
+	make_payment_request_with_schedule = async function () {
+		let frm = this.frm;
+		const { message: schedules } = await frappe.call({
+			method: "erpnext.accounts.doctype.payment_request.payment_request.get_available_payment_schedules",
+			args: {
+				reference_doctype: frm.doctype,
+				reference_name: frm.doc.name,
+			},
+		});
 
+		if (!schedules.length) {
+			this.make_payment_request();
+			return;
+		}
+		if (!schedules || !schedules.length) {
+			frappe.msgprint(__("No pending payment schedules available."));
+			return;
+		}
+
+		const dialog = new frappe.ui.Dialog({
+			title: __("Select Payment Schedule"),
+			fields: [
+				{
+					fieldtype: "Table",
+					fieldname: "payment_schedules",
+					label: __("Payment Schedules"),
+					cannot_add_rows: true,
+					in_place_edit: false,
+					data: schedules,
+					fields: [
+						{
+							fieldtype: "Data",
+							fieldname: "name",
+							label: __("Schedule Name"),
+							read_only: 1,
+						},
+						{
+							fieldtype: "Data",
+							fieldname: "payment_term",
+							label: __("Payment Term"),
+							in_list_view: 1,
+							read_only: 1,
+						},
+						{
+							fieldtype: "Date",
+							fieldname: "due_date",
+							label: __("Due Date"),
+							in_list_view: 1,
+							read_only: 1,
+						},
+						{
+							fieldtype: "Currency",
+							fieldname: "payment_amount",
+							label: __("Amount"),
+							in_list_view: 1,
+							read_only: 1,
+						},
+					],
+				},
+			],
+			primary_action_label: __("Create Payment Request"),
+			primary_action: async () => {
+				const values = dialog.get_values();
+				const selected = values.payment_schedules.filter((r) => r.__checked);
+
+				if (!selected.length) {
+					frappe.show_alert({
+						message: __("Please select at least one schedule."),
+						indicator: "orange",
+					});
+					return;
+				}
+				console.log(selected);
+				dialog.hide();
+				let me = this;
+				const payment_request_type = ["Sales Order", "Sales Invoice"].includes(this.frm.doc.doctype)
+					? "Inward"
+					: "Outward";
+				const { message: pr_name } = await frappe.call({
+					method: "erpnext.accounts.doctype.payment_request.payment_request.make_payment_request",
+					args: {
+						dt: me.frm.doc.doctype,
+						dn: me.frm.doc.name,
+						recipient_id: me.frm.doc.contact_email,
+						payment_request_type: payment_request_type,
+						party_type: payment_request_type == "Outward" ? "Supplier" : "Customer",
+						party: payment_request_type == "Outward" ? me.frm.doc.supplier : me.frm.doc.customer,
+						party_name:
+							payment_request_type == "Outward"
+								? me.frm.doc.supplier_name
+								: me.frm.doc.customer_name,
+						reference_doctype: frm.doctype,
+						reference_name: frm.docname,
+						schedules: selected,
+					},
+				});
+				frappe.model.sync(pr_name);
+				frappe.set_route("Form", "Payment Request", pr_name.name);
+			},
+		});
+
+		dialog.show();
+	};
 	onload_post_render() {
 		if (
 			this.frm.doc.__islocal &&
@@ -472,6 +583,7 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 		this.validate_has_items();
 		erpnext.utils.view_serial_batch_nos(this.frm);
 		this.set_route_options_for_new_doc();
+		erpnext.toggle_serial_batch_fields(this.frm);
 	}
 
 	set_route_options_for_new_doc() {
@@ -509,7 +621,7 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 
 	barcode(doc, cdt, cdn) {
 		let row = locals[cdt][cdn];
-		if (row.barcode) {
+		if (row.barcode && !frappe.flags.trigger_from_barcode_scanner) {
 			erpnext.stock.utils.set_item_details_using_barcode(this.frm, row, (r) => {
 				frappe.model.set_value(cdt, cdn, {
 					item_code: r.message.item_code,
@@ -583,6 +695,18 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 		}
 	}
 
+	calculate_withholding_amount(frm, cdt, cdn) {
+		// Calculate withholding amount: taxable_amount * tax_rate / 100
+		let row = frappe.get_doc(cdt, cdn);
+		let withholding_amount = flt(
+			(row.taxable_amount * row.tax_rate) / 100,
+			precision("withholding_amount", row)
+		);
+
+		// Set the calculated withholding amount
+		frappe.model.set_value(cdt, cdn, "withholding_amount", withholding_amount);
+	}
+
 	send_sms() {
 		var sms_man = new erpnext.SMSManager(this.frm.doc);
 	}
@@ -594,6 +718,7 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 		// Experimental: This will be removed once stability is achieved.
 		if (!frappe.boot.sysdefaults.use_legacy_js_reactivity) {
 			var item = frappe.get_doc(cdt, cdn);
+
 			frappe.call({
 				doc: doc,
 				method: "process_item_selection",
@@ -603,6 +728,7 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 				callback: function (r) {
 					if (!r.exc) {
 						me.frm.refresh_fields();
+						me.show_batch_dialog_if_required(item);
 					}
 				},
 			});
@@ -613,25 +739,13 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 
 	process_item_selection(doc, cdt, cdn) {
 		var item = frappe.get_doc(cdt, cdn);
+		let update_stock = 0;
 		var me = this;
-		var update_stock = 0,
-			show_batch_dialog = 0;
 
 		item.weight_per_unit = 0;
 		item.weight_uom = "";
+		item.uom = null; // make UOM blank to update the existing UOM when item changes
 		item.conversion_factor = 0;
-
-		if (["Sales Invoice", "Purchase Invoice"].includes(this.frm.doc.doctype)) {
-			update_stock = cint(me.frm.doc.update_stock);
-			show_batch_dialog = update_stock;
-		} else if (this.frm.doc.doctype === "Purchase Receipt" || this.frm.doc.doctype === "Delivery Note") {
-			show_batch_dialog = 1;
-		}
-
-		if (show_batch_dialog && item.use_serial_batch_fields === 1) {
-			show_batch_dialog = 0;
-		}
-
 		item.barcode = null;
 
 		if (item.item_code || item.serial_no) {
@@ -742,74 +856,7 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 									}
 								},
 								() => me.toggle_conversion_factor(item),
-								() => {
-									if (show_batch_dialog && !frappe.flags.trigger_from_barcode_scanner)
-										return frappe.db
-											.get_value("Item", item.item_code, [
-												"has_batch_no",
-												"has_serial_no",
-											])
-											.then((r) => {
-												if (
-													r.message &&
-													(r.message.has_batch_no || r.message.has_serial_no)
-												) {
-													frappe.flags.hide_serial_batch_dialog = false;
-												} else {
-													show_batch_dialog = false;
-												}
-											});
-								},
-								() => {
-									// check if batch serial selector is disabled or not
-									if (show_batch_dialog && !frappe.flags.hide_serial_batch_dialog)
-										return frappe.db
-											.get_single_value(
-												"Stock Settings",
-												"disable_serial_no_and_batch_selector"
-											)
-											.then((value) => {
-												if (value) {
-													frappe.flags.hide_serial_batch_dialog = true;
-												}
-											});
-								},
-								() => {
-									if (
-										show_batch_dialog &&
-										!frappe.flags.hide_serial_batch_dialog &&
-										!frappe.flags.dialog_set
-									) {
-										var d = locals[cdt][cdn];
-										$.each(r.message, function (k, v) {
-											if (!d[k]) d[k] = v;
-										});
-
-										if (d.has_batch_no && d.has_serial_no) {
-											d.batch_no = undefined;
-										}
-
-										frappe.flags.dialog_set = true;
-										erpnext.show_serial_batch_selector(
-											me.frm,
-											d,
-											(item) => {
-												me.frm.script_manager.trigger("qty", item.doctype, item.name);
-												if (!me.frm.doc.set_warehouse)
-													me.frm.script_manager.trigger(
-														"warehouse",
-														item.doctype,
-														item.name
-													);
-												me.apply_price_list(item, true);
-											},
-											undefined,
-											!frappe.flags.hide_serial_batch_dialog
-										);
-									} else {
-										frappe.flags.dialog_set = false;
-									}
-								},
+								() => me.show_batch_dialog_if_required(item),
 								() => me.conversion_factor(doc, cdt, cdn, true),
 								() => me.remove_pricing_rule(item),
 								() => {
@@ -828,6 +875,78 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 				});
 			}
 		}
+	}
+
+	show_batch_dialog_if_required(item) {
+		let show_batch_dialog = 0;
+		let update_stock = 0;
+		let me = this;
+
+		if (!item.item_code) {
+			return;
+		}
+
+		if (["Sales Invoice", "Purchase Invoice"].includes(this.frm.doc.doctype)) {
+			update_stock = cint(me.frm.doc.update_stock);
+			show_batch_dialog = update_stock;
+		} else if (this.frm.doc.doctype === "Purchase Receipt" || this.frm.doc.doctype === "Delivery Note") {
+			show_batch_dialog = 1;
+		}
+
+		if (show_batch_dialog && item.use_serial_batch_fields === 1) {
+			show_batch_dialog = 0;
+		}
+
+		frappe.run_serially([
+			() => {
+				if (show_batch_dialog && !frappe.flags.trigger_from_barcode_scanner)
+					return frappe.db
+						.get_value("Item", item.item_code, ["has_batch_no", "has_serial_no"])
+						.then((r) => {
+							if (r.message && (r.message.has_batch_no || r.message.has_serial_no)) {
+								item.has_serial_no = r.message.has_serial_no;
+								item.has_batch_no = r.message.has_batch_no;
+								frappe.flags.hide_serial_batch_dialog = false;
+							} else {
+								show_batch_dialog = false;
+							}
+						});
+			},
+			() => {
+				// check if batch serial selector is disabled or not
+				if (show_batch_dialog && !frappe.flags.hide_serial_batch_dialog)
+					return frappe.db
+						.get_single_value("Stock Settings", "disable_serial_no_and_batch_selector")
+						.then((value) => {
+							if (value) {
+								frappe.flags.hide_serial_batch_dialog = true;
+							}
+						});
+			},
+			() => {
+				if (show_batch_dialog && !frappe.flags.hide_serial_batch_dialog && !frappe.flags.dialog_set) {
+					if (item.has_batch_no && item.has_serial_no) {
+						item.batch_no = undefined;
+					}
+
+					frappe.flags.dialog_set = true;
+					erpnext.show_serial_batch_selector(
+						me.frm,
+						item,
+						(item) => {
+							me.frm.script_manager.trigger("qty", item.doctype, item.name);
+							if (!me.frm.doc.set_warehouse)
+								me.frm.script_manager.trigger("warehouse", item.doctype, item.name);
+							me.apply_price_list(item, true);
+						},
+						undefined,
+						!frappe.flags.hide_serial_batch_dialog
+					);
+				} else {
+					frappe.flags.dialog_set = false;
+				}
+			},
+		]);
 	}
 
 	price_list_rate(doc, cdt, cdn) {
@@ -881,7 +1000,7 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 	get_incoming_rate(item, posting_date, posting_time, voucher_type, company) {
 		let item_args = {
 			item_code: item.item_code,
-			warehouse: in_list("Purchase Receipt", "Purchase Invoice") ? item.from_warehouse : item.warehouse,
+			warehouse: item.warehouse,
 			posting_date: posting_date,
 			posting_time: posting_time,
 			qty: item.qty * item.conversion_factor,
@@ -922,11 +1041,10 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 				// Replace all occurences of comma with line feed
 				item.serial_no = item.serial_no.replace(/,/g, "\n");
 				item.conversion_factor = item.conversion_factor || 1;
-				refresh_field("serial_no", item.name, item.parentfield);
 				if (!doc.is_return) {
 					setTimeout(() => {
 						me.update_qty(cdt, cdn);
-					}, 3000);
+					}, 300);
 				}
 			}
 		}
@@ -1193,6 +1311,7 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 		if (this.frm.doc.transaction_date) {
 			this.frm.transaction_date = this.frm.doc.transaction_date;
 			frappe.ui.form.trigger(this.frm.doc.doctype, "currency");
+			this.recalculate_terms();
 		}
 	}
 
@@ -1237,6 +1356,10 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 			row[field] = "";
 		});
 		this.frm.refresh_field("payment_schedule");
+	}
+
+	cost_center(doc, cdt, cdn) {
+		erpnext.utils.copy_value_in_all_rows(doc, cdt, cdn, "items", "cost_center");
 	}
 
 	due_date(doc, cdt, cdn) {
@@ -1503,8 +1626,8 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 		} else if (
 			this.frm.doc.price_list_currency === this.frm.doc.currency &&
 			this.frm.doc.plc_conversion_rate &&
-			cint(this.frm.doc.plc_conversion_rate) != 1 &&
-			cint(this.frm.doc.plc_conversion_rate) != cint(this.frm.doc.conversion_rate)
+			flt(this.frm.doc.plc_conversion_rate) != 1 &&
+			flt(this.frm.doc.plc_conversion_rate) != flt(this.frm.doc.conversion_rate)
 		) {
 			this.frm.set_value("conversion_rate", this.frm.doc.plc_conversion_rate);
 		}
@@ -1695,13 +1818,13 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 		var company_currency = this.get_company_currency();
 
 		if (
-			this._last_company_currency === company_currency &&
+			this._last_currency === this.frm.doc.currency &&
 			this._last_price_list_currency === this.frm.doc.price_list_currency
 		) {
 			return;
 		}
 
-		this._last_company_currency = company_currency;
+		this._last_currency = this.frm.doc.currency;
 		this._last_price_list_currency = this.frm.doc.price_list_currency;
 
 		this.change_form_labels(company_currency);
@@ -1714,13 +1837,11 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 
 		this.frm.set_currency_labels(
 			[
+				"advance_paid",
 				"base_total",
 				"base_net_total",
 				"base_total_taxes_and_charges",
 				"base_discount_amount",
-				"base_grand_total",
-				"base_rounded_total",
-				"base_in_words",
 				"base_taxes_and_charges_added",
 				"base_taxes_and_charges_deducted",
 				"total_amount_to_pay",
@@ -1730,8 +1851,8 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 				"base_operating_cost",
 				"base_raw_material_cost",
 				"base_total_cost",
-				"base_scrap_material_cost",
-				"base_rounding_adjustment",
+				"base_secondary_items_cost",
+				"base_totals_section",
 			],
 			company_currency
 		);
@@ -1742,26 +1863,18 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 				"net_total",
 				"total_taxes_and_charges",
 				"discount_amount",
-				"grand_total",
 				"taxes_and_charges_added",
 				"taxes_and_charges_deducted",
 				"tax_withholding_net_total",
-				"rounded_total",
-				"in_words",
 				"paid_amount",
 				"write_off_amount",
 				"operating_cost",
-				"scrap_material_cost",
-				"rounding_adjustment",
+				"secondary_items_cost",
 				"raw_material_cost",
 				"total_cost",
+				"totals_section",
 			],
 			this.frm.doc.currency
-		);
-
-		this.frm.set_currency_labels(
-			["outstanding_amount", "total_advance"],
-			this.frm.doc.party_account_currency
 		);
 
 		this.frm.set_df_property(
@@ -1797,7 +1910,7 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 				"base_operating_cost",
 				"base_raw_material_cost",
 				"base_total_cost",
-				"base_scrap_material_cost",
+				"base_secondary_items_cost",
 				"base_rounding_adjustment",
 			],
 			this.frm.doc.currency != company_currency
@@ -1807,6 +1920,19 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 			["plc_conversion_rate", "price_list_currency"],
 			this.frm.doc.price_list_currency != company_currency
 		);
+
+		let taxes_fields = [
+			"total_taxes_and_charges",
+			"taxes_and_charges_deducted",
+			"taxes_and_charges_added",
+			"base_taxes_and_charges_added",
+			"base_taxes_and_charges_deducted",
+			"base_total_taxes_and_charges",
+		];
+
+		taxes_fields.forEach((field) => {
+			this.frm.toggle_display(field, this.frm.doc[field] !== 0 || this.frm.doc.docstatus !== 1);
+		});
 
 		let show =
 			cint(this.frm.doc.discount_amount) ||
@@ -1849,11 +1975,11 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 			});
 		}
 
-		if (this.frm.doc.scrap_items && this.frm.doc.scrap_items.length > 0) {
-			this.frm.set_currency_labels(["rate", "amount"], this.frm.doc.currency, "scrap_items");
-			this.frm.set_currency_labels(["base_rate", "base_amount"], company_currency, "scrap_items");
+		if (this.frm.doc.secondary_items && this.frm.doc.secondary_items.length > 0) {
+			this.frm.set_currency_labels(["rate", "amount"], this.frm.doc.currency, "secondary_items");
+			this.frm.set_currency_labels(["base_rate", "base_amount"], company_currency, "secondary_items");
 
-			var item_grid = this.frm.fields_dict["scrap_items"].grid;
+			var item_grid = this.frm.fields_dict["secondary_items"].grid;
 			$.each(["base_rate", "base_amount"], function (i, fname) {
 				if (frappe.meta.get_docfield(item_grid.doctype, fname))
 					item_grid.set_column_disp(fname, me.frm.doc.currency != company_currency);
@@ -2221,7 +2347,7 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 							child.apply_rule_on_other_items &&
 							JSON.parse(child.apply_rule_on_other_items).length
 						) {
-							if (!in_list(JSON.parse(child.apply_rule_on_other_items), child.item_code)) {
+							if (!JSON.parse(child.apply_rule_on_other_items).includes(child.item_code)) {
 								continue;
 							}
 						}
@@ -2269,7 +2395,7 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 					if (JSON.parse(data.apply_rule_on_other_items).includes(d[data.apply_rule_on])) {
 						for (var k in data) {
 							if (
-								in_list(fields, k) &&
+								fields.includes(k) &&
 								data[k] &&
 								(data.price_or_product_discount === "Price" || k === "pricing_rules")
 							) {
@@ -2741,8 +2867,7 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 	}
 
 	has_discount_in_schedule() {
-		let is_eligible = in_list(
-			["Sales Order", "Sales Invoice", "Purchase Order", "Purchase Invoice"],
+		let is_eligible = ["Sales Order", "Sales Invoice", "Purchase Order", "Purchase Invoice"].includes(
 			this.frm.doctype
 		);
 		let has_payment_schedule = this.frm.doc.payment_schedule && this.frm.doc.payment_schedule.length;
@@ -2841,6 +2966,7 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 				frappe.call({
 					method: "erpnext.controllers.stock_controller.make_quality_inspections",
 					args: {
+						company: me.frm.doc.company,
 						doctype: me.frm.doc.doctype,
 						docname: me.frm.doc.name,
 						items: selected_data,
@@ -3106,10 +3232,16 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 
 	set_warehouse() {
 		this.autofill_warehouse(this.frm.doc.items, "warehouse", this.frm.doc.set_warehouse);
+		this.autofill_warehouse(this.frm.doc.packed_items, "warehouse", this.frm.doc.set_warehouse);
 	}
 
 	set_target_warehouse() {
 		this.autofill_warehouse(this.frm.doc.items, "target_warehouse", this.frm.doc.set_target_warehouse);
+		this.autofill_warehouse(
+			this.frm.doc.packed_items,
+			"target_warehouse",
+			this.frm.doc.set_target_warehouse
+		);
 	}
 
 	set_from_warehouse() {
@@ -3138,6 +3270,23 @@ erpnext.TransactionController = class TransactionController extends erpnext.taxe
 			]);
 		}
 	}
+
+	setup_accounting_dimension_triggers() {
+		frappe.call({
+			method: "erpnext.accounts.doctype.accounting_dimension.accounting_dimension.get_dimensions",
+			callback: function (r) {
+				if (r.message && r.message[0]) {
+					let dimensions = r.message[0].map((d) => d.fieldname);
+					dimensions.forEach((dim) => {
+						// nosemgrep: frappe-semgrep-rules.rules.frappe-cur-frm-usage
+						cur_frm.cscript[dim] = function (doc, cdt, cdn) {
+							erpnext.utils.copy_value_in_all_rows(doc, cdt, cdn, "items", dim);
+						};
+					});
+				}
+			},
+		});
+	}
 };
 
 erpnext.show_serial_batch_selector = function (frm, item_row, callback, on_close, show_dialog) {
@@ -3161,16 +3310,13 @@ erpnext.show_serial_batch_selector = function (frm, item_row, callback, on_close
 			}
 
 			if (
-				in_list(
-					[
-						"Material Transfer",
-						"Send to Subcontractor",
-						"Material Issue",
-						"Material Consumption for Manufacture",
-						"Material Transfer for Manufacture",
-					],
-					frm.doc.purpose
-				)
+				[
+					"Material Transfer",
+					"Send to Subcontractor",
+					"Material Issue",
+					"Material Consumption for Manufacture",
+					"Material Transfer for Manufacture",
+				].includes(frm.doc.purpose)
 			) {
 				warehouse_field = "s_warehouse";
 			} else {

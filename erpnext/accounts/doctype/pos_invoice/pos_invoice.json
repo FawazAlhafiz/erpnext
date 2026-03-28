@@ -70,6 +70,7 @@
   "taxes",
   "sec_tax_breakup",
   "other_charges_calculation",
+  "item_wise_tax_details",
   "section_break_43",
   "base_total_taxes_and_charges",
   "column_break_47",
@@ -158,15 +159,16 @@
   "language",
   "column_break_84",
   "select_print_heading",
+  "utm_analytics_section",
+  "utm_source",
+  "utm_medium",
+  "column_break_bhao",
+  "utm_campaign",
   "more_information",
   "inter_company_invoice_reference",
   "customer_group",
   "is_discounted",
   "col_break23",
-  "utm_source",
-  "utm_campaign",
-  "utm_medium",
-  "column_break_gpiw",
   "status",
   "more_info",
   "debit_to",
@@ -185,7 +187,7 @@
   "subscription_section",
   "from_date",
   "to_date",
-  "column_break_140",
+  "auto_repeat_section",
   "auto_repeat",
   "update_auto_repeat_reference",
   "against_income_account"
@@ -1460,7 +1462,7 @@
   {
    "fieldname": "subscription_section",
    "fieldtype": "Section Break",
-   "label": "Subscription Section"
+   "label": "Subscription"
   },
   {
    "allow_on_submit": 1,
@@ -1477,10 +1479,6 @@
    "label": "To Date",
    "no_copy": 1,
    "print_hide": 1
-  },
-  {
-   "fieldname": "column_break_140",
-   "fieldtype": "Column Break"
   },
   {
    "allow_on_submit": 1,
@@ -1541,10 +1539,6 @@
    "label": "Update Billed Amount in Delivery Note"
   },
   {
-   "fieldname": "column_break_gpiw",
-   "fieldtype": "Column Break"
-  },
-  {
    "fieldname": "utm_medium",
    "fieldtype": "Link",
    "label": "Medium",
@@ -1602,12 +1596,36 @@
    "fieldtype": "Data",
    "is_virtual": 1,
    "label": "Last Scanned Warehouse"
+  },
+  {
+   "fieldname": "item_wise_tax_details",
+   "fieldtype": "Table",
+   "hidden": 1,
+   "label": "Item Wise Tax Details",
+   "no_copy": 1,
+   "options": "Item Wise Tax Detail",
+   "print_hide": 1
+  },
+  {
+   "collapsible": 1,
+   "fieldname": "utm_analytics_section",
+   "fieldtype": "Section Break",
+   "label": "UTM Analytics"
+  },
+  {
+   "fieldname": "column_break_bhao",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "auto_repeat_section",
+   "fieldtype": "Section Break",
+   "label": "Auto Repeat"
   }
  ],
  "icon": "fa fa-file-text",
  "is_submittable": 1,
  "links": [],
- "modified": "2025-08-04 22:22:31.471752",
+ "modified": "2026-03-02 07:32:47.667810",
  "modified_by": "Administrator",
  "module": "Accounts",
  "name": "POS Invoice",

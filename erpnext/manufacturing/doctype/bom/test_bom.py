@@ -6,7 +6,7 @@ from collections import deque
 from functools import partial
 
 import frappe
-from frappe.tests import IntegrationTestCase, timeout
+from frappe.tests import timeout
 from frappe.utils import cstr, flt
 
 from erpnext.controllers.tests.test_subcontracting_controller import (
@@ -20,11 +20,13 @@ from erpnext.stock.doctype.item.test_item import make_item
 from erpnext.stock.doctype.stock_reconciliation.test_stock_reconciliation import (
 	create_stock_reconciliation,
 )
+from erpnext.tests.utils import ERPNextTestSuite
 
-EXTRA_TEST_RECORD_DEPENDENCIES = ["Item", "Quality Inspection Template"]
 
+class TestBOM(ERPNextTestSuite):
+	def setUp(self):
+		self.load_test_records("BOM")
 
-class TestBOM(IntegrationTestCase):
 	@timeout
 	def test_get_items(self):
 		from erpnext.manufacturing.doctype.bom.bom import get_bom_items_as_dict
@@ -130,6 +132,15 @@ class TestBOM(IntegrationTestCase):
 		self.assertAlmostEqual(bom.base_operating_cost, base_op_cost)
 		self.assertAlmostEqual(bom.base_raw_material_cost, base_raw_material_cost)
 		self.assertAlmostEqual(bom.base_total_cost, base_raw_material_cost + base_op_cost)
+
+	@timeout
+	def test_bom_no_operation_time_validation(self):
+		bom = frappe.copy_doc(self.globalTestRecords["BOM"][2])
+		bom.docstatus = 0
+		for op_row in bom.operations:
+			op_row.time_in_mins = 0
+
+		self.assertRaises(frappe.ValidationError, bom.save)
 
 	@timeout
 	def test_bom_cost_with_batch_size(self):
@@ -390,6 +401,7 @@ class TestBOM(IntegrationTestCase):
 		item_code = make_item(properties={"is_stock_item": 1}).name
 
 		bom = frappe.new_doc("BOM")
+		bom.company = "_Test Company"
 		bom.item = item_code
 		bom.append("items", frappe._dict(item_code=item_code))
 		bom.save()
@@ -403,11 +415,13 @@ class TestBOM(IntegrationTestCase):
 		item2 = make_item(properties={"is_stock_item": 1}).name
 
 		bom1 = frappe.new_doc("BOM")
+		bom1.company = "_Test Company"
 		bom1.item = item1
 		bom1.append("items", frappe._dict(item_code=item2))
 		bom1.save()
 
 		bom2 = frappe.new_doc("BOM")
+		bom2.company = "_Test Company"
 		bom2.item = item2
 		bom2.append("items", frappe._dict(item_code=item1))
 		bom2.save()
@@ -565,6 +579,7 @@ class TestBOM(IntegrationTestCase):
 	@timeout
 	def test_clear_inpection_quality(self):
 		bom = frappe.copy_doc(self.globalTestRecords["BOM"][2], ignore_no_copy=True)
+		bom.company = "_Test Company"
 		bom.docstatus = 0
 		bom.is_default = 0
 		bom.quality_inspection_template = "_Test Quality Inspection Template"
@@ -610,6 +625,7 @@ class TestBOM(IntegrationTestCase):
 
 		# Step 1: Create BOM
 		bom = frappe.new_doc("BOM")
+		bom.company = "_Test Company"
 		bom.item = fg_item.item_code
 		bom.quantity = 1
 		bom.append(
@@ -647,7 +663,7 @@ class TestBOM(IntegrationTestCase):
 
 		from erpnext.manufacturing.doctype.production_plan.test_production_plan import make_bom
 
-		bom = make_bom(item=fg_item, raw_materials=[rm_item], do_not_save=True)
+		bom = make_bom(item=fg_item, raw_materials=[rm_item], currency="INR", do_not_save=True)
 
 		bom.rm_cost_as_per = "Last Purchase Rate"
 		bom.save()
@@ -794,7 +810,7 @@ def level_order_traversal(node):
 	return traversal
 
 
-def create_nested_bom(tree, prefix="_Test bom ", submit=True):
+def create_nested_bom(tree, prefix="_Test bom ", submit=True, phantom_items=None):
 	"""Helper function to create a simple nested bom from tree describing item names. (along with required items)"""
 
 	def create_items(bom_tree):
@@ -805,6 +821,9 @@ def create_nested_bom(tree, prefix="_Test bom ", submit=True):
 					doctype="Item", item_code=bom_item_code, item_group="_Test Item Group"
 				).insert()
 			create_items(subtree)
+
+	if not phantom_items:
+		phantom_items = []
 
 	create_items(tree)
 
@@ -824,7 +843,7 @@ def create_nested_bom(tree, prefix="_Test bom ", submit=True):
 		child_items = dfs(tree, item)
 		if child_items:
 			bom_item_code = prefix + item
-			bom = frappe.get_doc(doctype="BOM", item=bom_item_code)
+			bom = frappe.get_doc(doctype="BOM", item=bom_item_code, is_phantom_bom=item in phantom_items)
 			for child_item in child_items.keys():
 				bom.append("items", {"item_code": prefix + child_item})
 			bom.company = "_Test Company"
@@ -857,11 +876,12 @@ def reset_item_valuation_rate(item_code, warehouse_list=None, qty=None, rate=Non
 
 
 def create_bom_with_process_loss_item(
-	fg_item, bom_item, scrap_qty=0, scrap_rate=0, fg_qty=2, process_loss_percentage=0
+	fg_item, bom_item, scrap_qty=0, scrap_rate=0, fg_qty=2, process_loss_percentage=0, company=None
 ):
 	bom_doc = frappe.new_doc("BOM")
 	bom_doc.item = fg_item.item_code
 	bom_doc.quantity = fg_qty
+	bom_doc.company = company
 	bom_doc.append(
 		"items",
 		{
@@ -875,7 +895,7 @@ def create_bom_with_process_loss_item(
 
 	if scrap_qty:
 		bom_doc.append(
-			"scrap_items",
+			"secondary_items",
 			{
 				"item_code": fg_item.item_code,
 				"qty": scrap_qty,
@@ -906,3 +926,15 @@ def create_process_loss_bom_item(item_tuple):
 		return make_item(item_code, {"stock_uom": stock_uom, "valuation_rate": 100})
 	else:
 		return frappe.get_doc("Item", item_code)
+
+
+def create_tree_for_phantom_bom_tests():  # returns expected explosion result
+	bom_tree_1 = {
+		"Top Level Parent": {
+			"Sub Assembly Level 1-1": {"Phantom Item Level 1-2": {"Item Level 1-3": {}}},
+			"Phantom Item Level 2-1": {"Phantom Item Level 2-2": {"Item Level 2-3": {}}},
+		}
+	}
+	phantom_list = ["Phantom Item Level 1-2", "Phantom Item Level 2-1", "Phantom Item Level 2-2"]
+	create_nested_bom(bom_tree_1, prefix="", phantom_items=phantom_list)
+	return ["Sub Assembly Level 1-1", "Item Level 2-3"]

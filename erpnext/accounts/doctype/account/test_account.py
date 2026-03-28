@@ -1,9 +1,7 @@
 # Copyright (c) 2015, Frappe Technologies Pvt. Ltd. and Contributors
 # License: GNU General Public License v3. See license.txt
-import unittest
 
 import frappe
-from frappe.tests import IntegrationTestCase
 from frappe.utils import nowdate
 
 from erpnext.accounts.doctype.account.account import (
@@ -12,11 +10,10 @@ from erpnext.accounts.doctype.account.account import (
 	update_account_number,
 )
 from erpnext.stock import get_company_default_inventory_account, get_warehouse_account
+from erpnext.tests.utils import ERPNextTestSuite
 
-EXTRA_TEST_RECORD_DEPENDENCIES = ["Company"]
 
-
-class TestAccount(IntegrationTestCase):
+class TestAccount(ERPNextTestSuite):
 	def test_rename_account(self):
 		if not frappe.db.exists("Account", "1210 - Debtors - _TC"):
 			acc = frappe.new_doc("Account")
@@ -415,15 +412,13 @@ def create_account(**kwargs):
 		return account.name
 	else:
 		account = frappe.get_doc(
-			dict(
-				doctype="Account",
-				is_group=kwargs.get("is_group", 0),
-				account_name=kwargs.get("account_name"),
-				account_type=kwargs.get("account_type"),
-				parent_account=kwargs.get("parent_account"),
-				company=kwargs.get("company"),
-				account_currency=kwargs.get("account_currency"),
-			)
+			doctype="Account",
+			is_group=kwargs.get("is_group", 0),
+			account_name=kwargs.get("account_name"),
+			account_type=kwargs.get("account_type"),
+			parent_account=kwargs.get("parent_account"),
+			company=kwargs.get("company"),
+			account_currency=kwargs.get("account_currency"),
 		)
 
 		account.save()

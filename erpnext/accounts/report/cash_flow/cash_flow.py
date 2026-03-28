@@ -10,6 +10,9 @@ from frappe.query_builder import DocType
 from frappe.utils import cstr, flt
 from pypika import Order
 
+from erpnext.accounts.doctype.financial_report_template.financial_report_engine import (
+	FinancialReportEngine,
+)
 from erpnext.accounts.report.financial_statements import (
 	get_columns,
 	get_cost_centers_with_children,
@@ -25,6 +28,9 @@ from erpnext.accounts.utils import get_fiscal_year
 
 
 def execute(filters=None):
+	if filters and filters.report_template:
+		return FinancialReportEngine().execute(filters)
+
 	period_list = get_period_list(
 		filters.from_fiscal_year,
 		filters.to_fiscal_year,
@@ -139,7 +145,7 @@ def execute(filters=None):
 		True,
 	)
 
-	chart = get_chart_data(columns, data, company_currency)
+	chart = get_chart_data(period_list, data, company_currency)
 
 	report_summary = get_report_summary(summary_data, company_currency)
 
@@ -411,12 +417,12 @@ def get_report_summary(summary_data, currency):
 	return report_summary
 
 
-def get_chart_data(columns, data, currency):
-	labels = [d.get("label") for d in columns[2:]]
+def get_chart_data(period_list, data, currency):
+	labels = [period.get("label") for period in period_list]
 	datasets = [
 		{
 			"name": section.get("section").replace("'", ""),
-			"values": [section.get(d.get("fieldname")) for d in columns[2:]],
+			"values": [section.get(period.get("key")) for period in period_list],
 		}
 		for section in data
 		if section.get("parent_section") is None and section.get("currency")
