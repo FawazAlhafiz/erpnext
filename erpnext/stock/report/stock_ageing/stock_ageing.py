@@ -135,6 +135,7 @@ def get_columns(filters: Filters) -> list[dict]:
 			"fieldtype": "Link",
 			"options": "Item",
 			"width": 100,
+			"sticky": "True",
 		},
 		{"label": _("Item Name"), "fieldname": "item_name", "fieldtype": "Data", "width": 100},
 		{"label": _("Description"), "fieldname": "description", "fieldtype": "Data", "width": 200},
@@ -162,6 +163,7 @@ def get_columns(filters: Filters) -> list[dict]:
 				"fieldtype": "Link",
 				"options": "Warehouse",
 				"width": 100,
+				"sticky": "True",
 			}
 		]
 
@@ -615,5 +617,5 @@ class FIFOSlots:
 			sr_item = frappe.db.get_value(
 				"Stock Reconciliation Item", row.voucher_detail_no, ["current_qty", "qty"], as_dict=True
 			)
-			if sr_item.qty and sr_item.current_qty:
+			if sr_item and sr_item.qty and sr_item.current_qty:
 				self.stock_reco_voucher_wise_count[row.voucher_detail_no] = sr_item.current_qty
